@@ -152,7 +152,7 @@ def find_kindle_windows() -> list[int]:
     return windows
 
 
-def activate_window(handle: int):
+def activate_window(handle: int) -> bool:
     """Windowsの前面化制限を回避して、指定ウィンドウを一時的に操作可能にする。"""
     if win32gui.IsIconic(handle):
         win32gui.ShowWindow(handle, win32con.SW_RESTORE)
@@ -168,10 +168,17 @@ def activate_window(handle: int):
             if thread_id and thread_id != own_thread:
                 if ctypes.windll.user32.AttachThreadInput(own_thread, thread_id, True):
                     attached_threads.append(thread_id)
-        win32gui.BringWindowToTop(handle)
-        win32gui.SetForegroundWindow(handle)
-        if win32gui.GetForegroundWindow() != handle:
-            raise RuntimeError("Kindleを前面化できませんでした。")
+        for _ in range(3):
+            try:
+                ctypes.windll.user32.AllowSetForegroundWindow(-1)
+                win32gui.BringWindowToTop(handle)
+                win32gui.SetForegroundWindow(handle)
+            except Exception:
+                pass
+            if win32gui.GetForegroundWindow() == handle:
+                return True
+            time.sleep(0.15)
+        return False
     finally:
         for thread_id in attached_threads:
             ctypes.windll.user32.AttachThreadInput(own_thread, thread_id, False)
@@ -356,15 +363,20 @@ class CaptureThread(QThread):
 
         if self.settings['compatibility_mode']:
             previous_handle = win32gui.GetForegroundWindow()
-            activate_window(handle)
-            time.sleep(0.1)
-            win32api.keybd_event(virtual_key, 0, 0, 0)
-            win32api.keybd_event(virtual_key, 0, win32con.KEYEVENTF_KEYUP, 0)
-            time.sleep(0.2)
-            if (previous_handle != handle and win32gui.IsWindow(previous_handle)
-                    and win32gui.IsWindowVisible(previous_handle) and not win32gui.IsIconic(previous_handle)):
-                win32gui.SetForegroundWindow(previous_handle)
-            return
+            if activate_window(handle):
+                time.sleep(0.1)
+                win32api.keybd_event(virtual_key, 0, 0, 0)
+                win32api.keybd_event(virtual_key, 0, win32con.KEYEVENTF_KEYUP, 0)
+                time.sleep(0.2)
+                if (previous_handle != handle and win32gui.IsWindow(previous_handle)
+                        and win32gui.IsWindowVisible(previous_handle) and not win32gui.IsIconic(previous_handle)):
+                    try:
+                        win32gui.SetForegroundWindow(previous_handle)
+                    except Exception:
+                        pass
+                return
+
+            self.status_updated.emit("Kindleを前面化できないため、直接キー送信に切り替えます")
 
         scan_code = win32api.MapVirtualKey(virtual_key, 0)
         key_down_lparam = 1 | (scan_code << 16)
