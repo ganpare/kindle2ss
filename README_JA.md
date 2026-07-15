@@ -1,9 +1,8 @@
 # Kindle Screenshot Tool
 
 <p align="center">
-  <a href="README_JA.md"><kbd>日本語</kbd></a>
-  &nbsp;
-  <a href="README_EN.md"><kbd>English</kbd></a>
+  <a href="README_JA.md"><img alt="日本語" src="https://img.shields.io/badge/Language-日本語-0E7C7B?style=for-the-badge"></a>
+  <a href="README_EN.md"><img alt="English" src="https://img.shields.io/badge/Language-English-2563EB?style=for-the-badge"></a>
 </p>
 
 Windows版Kindleアプリに表示された本をページ送りしながら撮影し、OCRで検索可能なPDFとMarkdownへ変換するツールです。Kindleの本データへはアクセスせず、表示中のウィンドウ画像だけを扱います。
