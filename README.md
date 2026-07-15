@@ -11,6 +11,7 @@ A Windows tool that captures pages shown in the Kindle desktop app, then uses OC
 - Choose right- or left-arrow page turns
 - Compatibility mode brings Kindle to the foreground only while turning a page
 - OCR page-number detection with current-page status
+- Optional book-title OCR with a manual correction field
 - Exports one combined PDF and one combined Markdown file per capture
 
 ## Requirements
@@ -57,10 +58,10 @@ python kindle2ss_qt.py
 Every OCR-enabled capture creates the following structure:
 
 ```text
-output_YYYYMMDDHHMMSS/
-output_YYYYMMDDHHMMSS_ocr/
+output_<book-title>_YYYYMMDDHHMMSS/
+output_<book-title>_YYYYMMDDHHMMSS_ocr/
   book.pdf          # all pages merged into one PDF
-  book.md           # all pages merged into one Markdown file
+  book.md           # all pages merged into one Markdown file, headed by the book title
   pdf_pages/        # per-page OCR artifacts
   markdown_pages/   # per-page OCR artifacts
 ```

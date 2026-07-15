@@ -28,6 +28,11 @@ import pytesseract
 PW_RENDERFULLCONTENT = 2
 TESSERACT_EXE = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 TESSDATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tessdata")
+WINDOWS_RESERVED_FILENAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{number}" for number in range(1, 10)),
+    *(f"LPT{number}" for number in range(1, 10)),
+}
 
 if os.path.exists(TESSERACT_EXE):
     pytesseract.pytesseract.tesseract_cmd = TESSERACT_EXE
@@ -115,6 +120,37 @@ def format_page_status(current_page: Optional[int], total_pages: Optional[int]) 
     if current_page:
         return f"現在のページ: {current_page}"
     return "現在のページ: 検出できません"
+
+
+def safe_filename_part(value: str, fallback: str = "book") -> str:
+    """書名をWindowsで使える、短いファイル名の一部に整形する。"""
+    invalid_characters = '<>:"/\\|?*' + "".join(chr(number) for number in range(32))
+    cleaned = "".join("_" if character in invalid_characters else character for character in value)
+    cleaned = " ".join(cleaned.split()).strip(" .")
+    if not cleaned:
+        return fallback
+    if cleaned.upper() in WINDOWS_RESERVED_FILENAMES:
+        cleaned = f"_{cleaned}"
+    return cleaned[:80].rstrip(" .") or fallback
+
+
+def find_book_title(handle: int) -> Optional[str]:
+    """Kindle画面上部から書名らしい文字列をOCRで探す（手入力の補助用）。"""
+    image = capture_window(handle)
+    # Kindleの上部には操作バーもあるので、複数行のうち十分に長い行だけを候補にする。
+    title_band = image.crop((0, 45, image.width, min(image.height, 260)))
+    text = pytesseract.image_to_string(title_band, lang="jpn", config="--psm 6")
+    ignored_words = ("検索", "ライブラリ", "kindleストア", "戻る", "設定")
+    candidates = []
+    for line in text.splitlines():
+        line = " ".join(line.split()).strip(" -|・")
+        if len(line) < 8 or any(word in line.lower() for word in ignored_words):
+            continue
+        # OCRの記号だけの行やページ表示を候補にしない。
+        if len(re.sub(r"[^0-9A-Za-zぁ-んァ-ヶ一-龠]", "", line)) < 6:
+            continue
+        candidates.append(line)
+    return max(candidates, key=len) if candidates else None
 
 
 def is_kindle_window(handle: int) -> bool:
@@ -280,8 +316,11 @@ class CaptureThread(QThread):
     def run(self):
         try:
             # 出力フォルダ作成
-            folder_name = (self.settings['folder_prefix'] + "_" +
-                          datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
+            folder_name_parts = [safe_filename_part(self.settings['folder_prefix'], "output")]
+            if self.settings.get('book_title'):
+                folder_name_parts.append(safe_filename_part(self.settings['book_title']))
+            folder_name_parts.append(datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
+            folder_name = "_".join(folder_name_parts)
             os.mkdir(folder_name)
 
             self.status_updated.emit(f"キャプチャ中... フォルダ: {folder_name}")
@@ -467,6 +506,9 @@ class OCRThread(QThread):
             raise RuntimeError("YomitokuがMarkdownを出力しませんでした。")
 
         with open(output_path, "w", encoding="utf-8") as output_file:
+            book_title = self.settings.get("book_title", "").strip()
+            if book_title:
+                output_file.write(f"# {book_title}\n\n")
             for index, source_file in enumerate(source_files, start=1):
                 if index > 1:
                     output_file.write("\n\n---\n\n")
@@ -602,6 +644,19 @@ class MainWindow(QMainWindow):
         detect_btn.clicked.connect(self.detect_kindle)
         layout.addWidget(detect_btn)
 
+        title_layout = QHBoxLayout()
+        title_layout.addWidget(QLabel("書名:"))
+        self.book_title_edit = QLineEdit()
+        self.book_title_edit.setPlaceholderText("未入力なら従来どおり output 名で保存")
+        self.book_title_edit.setToolTip("出力フォルダ名と結合Markdownの見出しに使います。自由に修正できます。")
+        title_layout.addWidget(self.book_title_edit)
+        layout.addLayout(title_layout)
+
+        title_btn = QPushButton("画面から書名を取得")
+        title_btn.setToolTip("Kindle上部の表示から書名候補を読み取ります。取得できない場合は手入力してください。")
+        title_btn.clicked.connect(self.detect_book_title)
+        layout.addWidget(title_btn)
+
         group.setLayout(layout)
         return group
 
@@ -698,7 +753,7 @@ class MainWindow(QMainWindow):
         self.enable_ocr_check.setChecked(True)
         layout.addWidget(self.enable_ocr_check)
 
-        output_label = QLabel("出力: 結合PDF（book.pdf）+ 結合Markdown（book.md）")
+        output_label = QLabel("出力: 書名付きフォルダ内に結合PDF（book.pdf）+ 結合Markdown（book.md）")
         output_label.setWordWrap(True)
         layout.addWidget(output_label)
 
@@ -859,6 +914,24 @@ class MainWindow(QMainWindow):
         if hasattr(self, "log_text"):
             self.log(f"Kindleを検出しました: {title} ({width}×{height})")
 
+    def detect_book_title(self):
+        """画面上部をOCRし、書名欄へ候補を設定する。"""
+        error = self.get_target_error()
+        if error:
+            QMessageBox.warning(self, "Kindleが必要です", error)
+            return
+        try:
+            title = find_book_title(self.target_handle)
+            if not title:
+                message = "書名を自動取得できませんでした。書名欄へ手入力してください。"
+                QMessageBox.information(self, "書名を取得できません", message)
+                self.log(message)
+                return
+            self.book_title_edit.setText(title)
+            self.log(f"書名候補を取得しました: {title}")
+        except Exception as e:
+            QMessageBox.warning(self, "書名の取得に失敗", str(e))
+
     def select_region(self):
         """本文領域をKindleウィンドウ全体へ安全に設定する。"""
         error = self.get_target_error()
@@ -931,6 +1004,7 @@ class MainWindow(QMainWindow):
             return
 
         # 設定を収集
+        self.active_book_title = self.book_title_edit.text().strip()
         settings = {
             'region': self.region,
             'page_region': self.page_region,
@@ -940,6 +1014,7 @@ class MainWindow(QMainWindow):
             'page_direction': self.direction_combo.currentData(),
             'compatibility_mode': self.compatibility_mode_check.isChecked(),
             'folder_prefix': self.folder_edit.text(),
+            'book_title': self.active_book_title,
             'enable_ocr': self.enable_ocr_check.isChecked(),
             'ocr_lite': self.lite_mode_check.isChecked(),
         }
@@ -977,6 +1052,7 @@ class MainWindow(QMainWindow):
         if self.enable_ocr_check.isChecked():
             settings = {
                 'ocr_lite': self.lite_mode_check.isChecked(),
+                'book_title': getattr(self, 'active_book_title', ''),
             }
             self.ocr_thread = OCRThread(folder_name, settings)
             self.ocr_thread.status_updated.connect(self.update_status)
