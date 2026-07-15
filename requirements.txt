@@ -4,3 +4,4 @@ Pillow
 yomitoku
 pytesseract
 PySide6>=6.10.0
+pypdf
